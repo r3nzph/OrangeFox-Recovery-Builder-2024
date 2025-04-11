@@ -14,31 +14,31 @@ on:
       DEVICE_TREE_URL:
         description: 'DEVICE_TREE_URL'
         required: true
-        default: 'https://github.com/Shirayuki39/twrp-device_tecno_TECNO-LG8n'
+        default: 'https://github.com/r3nzph/twrp_KJ5'
       DEVICE_TREE_BRANCH:
         description: 'DEVICE_TREE_BRANCH'
         required: true
-        default: 'fox_12.1'
+        default: 'main'
       DEVICE_PATH:
         description: 'DEVICE_PATH'
         required: true
-        default: 'device/tecno/LG8n'
+        default: 'device/tecno/KJ5'
       COMMON_TREE_URL:
         description: 'COMMON_TREE_URL (if no common tree, leave blank)'
         required: false
-        default: 'https://github.com/Shirayuki39/twrp-device_transsion_mt6789-common'
+        default: ''
       COMMON_PATH:
         description: 'COMMON_PATH (if no common tree, leave blank)'
         required: false
-        default: 'device/transsion/mt6789-common'
+        default: ''
       DEVICE_NAME:
         description: 'DEVICE_NAME'
         required: true
-        default: 'TECNO-LG8n'
+        default: 'KJ5
       MAKEFILE_NAME:
         description: 'MAKEFILE_NAME'
         required: true
-        default: 'twrp_LG8n'
+        default: 'twrp_KJ5'
       BUILD_TARGET:
         description: 'BUILD_TARGET'
         required: true
