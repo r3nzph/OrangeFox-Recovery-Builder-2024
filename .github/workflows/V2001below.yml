@@ -14,11 +14,11 @@ on:
       DEVICE_TREE:
         description: 'Custom Recovery Tree'
         required: true
-        default: 'https://github.com/r3nzph/twrp_KJ5.git'
+        default: 'https://github.com/r3nzph/recovery-device_tecno_KJ5.git'
       DEVICE_TREE_BRANCH:
         description: 'Custom Recovery Tree Branch'
         required: true
-        default: 'main'
+        default: 'twrp-12.1'
       DEVICE_PATH:
         description: 'Specify your device path.'
         required: true
@@ -30,7 +30,7 @@ on:
       BUILD_TARGET:
         description: 'Specify your Build Target'
         required: true
-        default: 'vendorboot'
+        default: 'boot'
         type: choice
         options:
         - boot
