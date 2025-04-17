@@ -1,4 +1,4 @@
-name: OrangeFox - Build
+name: OrangeFox - V2001
 
 on:
   workflow_dispatch:
@@ -14,11 +14,11 @@ on:
       DEVICE_TREE:
         description: 'Custom Recovery Tree'
         required: true
-        default: 'https://github.com/r3nzph/twrp_KJ5.git'
+        default: 'https://github.com/r3nzph/twrp-device_tecno_TECNO-KJ5-v2001.git'
       DEVICE_TREE_BRANCH:
         description: 'Custom Recovery Tree Branch'
         required: true
-        default: 'main'
+        default: 'OFOX'
       DEVICE_PATH:
         description: 'Specify your device path.'
         required: true
