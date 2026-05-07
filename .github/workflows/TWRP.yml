@@ -6,11 +6,11 @@ on:
       MANIFEST_BRANCH:
         description: 'TWRP Branch'
         required: true
-        default: 'android-12.1'
+        default: '12.1'
         type: choice
         options:
-        - android-12.1
-        - android-11
+        - 12.1
+        - 11.0
 
       DEVICE_TREE:
         description: 'Custom Recovery Tree'
@@ -42,11 +42,22 @@ on:
         - recovery
         - vendorboot
 
+      LDCHECK:
+        description: 'Path of blobs to check'
+        required: true
+        default: 'system/bin/qseecomd'
+
       RECOVERY_TAR:
         description: 'Release recovery.tar For Samsung devices'
         required: false
         default: false
         type: boolean
+
+      RECOVERY_INSTALLER:
+        description: 'Include recovery installer zip'
+        type: boolean
+        required: true
+        default: true
 
 jobs:
   build:
@@ -66,6 +77,14 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
+    - name: Display Inputs
+      run: |
+        echo "::group::User Environment Variables"
+        echo "Displaying variables/inputs."
+        echo "Include Recovery Installer: ${{ github.event.inputs.RECOVERY_INSTALLER }}"
+        echo "Release recovery.tar For Samsung devices: ${{ github.event.inputs.RECOVERY_TAR }}"
+        echo "::endgroup::"
+
     - name: Clean-up
       uses: rokibhasansagar/slimhub_actions@main
 
@@ -74,7 +93,7 @@ jobs:
       with:
         swap-size-gb: 24
 
-    # ✅ FAST BUILD ENVIRONMENT
+    # ✅ FAST + FIXED BUILD ENVIRONMENT
     - name: Build Environment
       run: |
         sudo apt update
@@ -93,18 +112,22 @@ jobs:
         chmod a+x ~/bin/repo
         echo "$HOME/bin" >> $GITHUB_PATH
 
+        # Git optimizations
         git config --global color.ui false
         git config --global core.compression 0
         git config --global http.postBuffer 157286400
 
-    # ✅ TWRP MANIFEST
     - name: Set-up Manifest
+      if: github.event.inputs.MANIFEST_BRANCH == '11.0' || github.event.inputs.MANIFEST_BRANCH == '12.1'
       run: |
         mkdir -p ${GITHUB_WORKSPACE}/TWRP
 
         cd ${GITHUB_WORKSPACE}/TWRP
 
-        repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b ${{ github.event.inputs.MANIFEST_BRANCH }}
+        git config --global user.name "r3nzph"
+        git config --global user.email "abarracosorenznino@gmail.com"
+
+        repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-${{ github.event.inputs.MANIFEST_BRANCH }}
 
         repo sync -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
 
@@ -121,83 +144,105 @@ jobs:
 
         echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
 
-    # ✅ CCACHE
-    - name: Setup ccache
-      uses: actions/cache@v4
+    - name: Check Manifest Branch
+      uses: haya14busa/action-cond@v1
+      id: fox_branch
       with:
-        path: ~/.ccache
-        key: ${{ runner.os }}-ccache-${{ github.event.inputs.DEVICE_NAME }}
-        restore-keys: |
-          ${{ runner.os }}-ccache-
+        cond: ${{ github.event.inputs.MANIFEST_BRANCH == '11.0' || github.event.inputs.MANIFEST_BRANCH == '12.1' }}
+        if_true: lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng && make clean && mka adbd ${{ github.event.inputs.BUILD_TARGET }}image
+        if_false: lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng && make clean && mka ${{ github.event.inputs.BUILD_TARGET }}image
 
-    # ✅ BUILD TWRP
     - name: Building TWRP
       run: |
         cd ${GITHUB_WORKSPACE}/TWRP
 
         export ALLOW_MISSING_DEPENDENCIES=true
 
+        # Enable ccache
         export USE_CCACHE=1
         export CCACHE_EXEC=$(which ccache)
 
         ccache -M 10G
 
+        set +e
         source build/envsetup.sh
+        set -e
 
-        lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng
-
-        make clean
-
-        mka ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
+        ${{ steps.fox_branch.outputs.value }} -j$(nproc --all)
 
     - name: Set Build Date
       run: |
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
-    # ✅ FIND OUTPUT
     - name: Check if Recovery Exist
       run: |
         cd ${GITHUB_WORKSPACE}/TWRP
 
-        if [ -f out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img ]; then
+        if [ -f out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img ]; then
 
             echo "CHECK_IMG_IS_OK=true" >> $GITHUB_ENV
 
             echo "FILE_PATH=${GITHUB_WORKSPACE}/TWRP/out/target/product/${{ github.event.inputs.DEVICE_NAME }}" >> $GITHUB_ENV
 
-            echo "MD5_IMG=$(md5sum out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img | cut -d ' ' -f 1)" >> $GITHUB_ENV
+            echo "MD5_IMG=$(md5sum out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img | cut -d ' ' -f 1)" >> $GITHUB_ENV
+
+        elif [ -f out/target/product/${{ github.event.inputs.DEVICE_NAME }}/vendor_boot.img ]; then
+
+            echo "CHECK_IMG_IS_OK=true" >> $GITHUB_ENV
+
+            echo "FILE_PATH=${GITHUB_WORKSPACE}/TWRP/out/target/product/${{ github.event.inputs.DEVICE_NAME }}" >> $GITHUB_ENV
+
+            echo "MD5_IMG=$(md5sum out/target/product/${{ github.event.inputs.DEVICE_NAME }}/vendor_boot.img | cut -d ' ' -f 1)" >> $GITHUB_ENV
 
         else
-            echo "Recovery output not found."
+            echo "Recovery out directory is empty."
             exit 1
         fi
 
-    # ✅ RENAME
-    - name: Rename Recovery
+    - name: Rename the Recovery
       run: |
-        cd ${{ env.FILE_PATH }}
+        cd ${{ env.FILE_PATH }}/
 
-        if [ "${{ github.event.inputs.BUILD_TARGET }}" = "vendorboot" ]; then
-          mv vendorboot.img vendor_boot.img
+        if [ "${{ github.event.inputs.BUILD_TARGET }}" = "boot" ]; then
+
+          echo "RECOVERY_TYPE=boot" >> $GITHUB_ENV
+
+        elif [ "${{ github.event.inputs.BUILD_TARGET }}" = "recovery" ]; then
+
+          echo "RECOVERY_TYPE=recovery" >> $GITHUB_ENV
+
+        elif [ "${{ github.event.inputs.BUILD_TARGET }}" = "vendorboot" ]; then
+
           echo "RECOVERY_TYPE=vendor_boot" >> $GITHUB_ENV
 
-        else
-          echo "RECOVERY_TYPE=${{ github.event.inputs.BUILD_TARGET }}" >> $GITHUB_ENV
         fi
+      continue-on-error: true
 
-    # ✅ TAR
+    - name: Include Recovery Installer
+      run: |
+        if [ ${{ github.event.inputs.RECOVERY_INSTALLER }} = true ]; then
+
+          cd ${{ env.FILE_PATH }}/
+
+          wget https://github.com/kinguser981/recovery-installer/releases/download/11256427880/recovery-installer.zip
+
+          zip -ur recovery-installer.zip ${{ env.RECOVERY_TYPE }}.img
+
+        fi
+      continue-on-error: true
+
     - name: Recovery to tar
       run: |
         if [ ${{ github.event.inputs.RECOVERY_TAR }} = true ]; then
 
-          cd ${{ env.FILE_PATH }}
+          cd ${{ env.FILE_PATH }}/
 
           tar -cvf ${{ env.RECOVERY_TYPE }}.tar ${{ env.RECOVERY_TYPE }}.img
 
         fi
       continue-on-error: true
 
-    # ✅ RELEASE
+    # ✅ UPGRADED RELEASE
     - name: Upload to Release
       if: env.CHECK_IMG_IS_OK == 'true'
       uses: softprops/action-gh-release@v1
@@ -206,6 +251,7 @@ jobs:
         files: |
           ${{ env.FILE_PATH }}/${{ env.RECOVERY_TYPE }}.img
           ${{ env.FILE_PATH }}/${{ env.RECOVERY_TYPE }}.tar
+          ${{ env.FILE_PATH }}/recovery-installer.zip
 
         name: 🔷 TWRP-${{ github.event.inputs.DEVICE_NAME }}-${{ env.BUILD_DATE }}
 
@@ -238,6 +284,12 @@ jobs:
 
           ---
 
+          ## 📥 Downloads
+
+          Check the **Assets section below**
+
+          ---
+
           ## 🔐 MD5
 
           ```
@@ -246,4 +298,19 @@ jobs:
 
           ---
 
-          ⚠️ Automated unofficial build. Flash at your own risk.
+          ⚠️ Automated build. Flash at your own risk.
+
+    - name: Run LDCheck
+      run: |
+        cd tools
+
+        mv -n libneeds ${{ env.FILE_PATH }}/recovery/root/
+        mv -n ldcheck ${{ env.FILE_PATH }}/recovery/root/
+
+        cd ${{ env.FILE_PATH }}/recovery/root/
+
+        python3 ldcheck \
+        -p system/lib64:vendor/lib64:system/lib:vendor/lib \
+        -d ${{ github.event.inputs.LDCHECK }}
+
+      continue-on-error: true
