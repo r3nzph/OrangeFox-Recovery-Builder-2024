@@ -1,0 +1,249 @@
+name: TWRP
+
+on:
+  workflow_dispatch:
+    inputs:
+      MANIFEST_BRANCH:
+        description: 'TWRP Branch'
+        required: true
+        default: 'android-12.1'
+        type: choice
+        options:
+        - android-12.1
+        - android-11
+
+      DEVICE_TREE:
+        description: 'Custom Recovery Tree'
+        required: true
+        default: 'https://github.com/r3nzph/twrp-device_tecno_TECNO-KJ5-v2001.git'
+
+      DEVICE_TREE_BRANCH:
+        description: 'Custom Recovery Tree Branch'
+        required: true
+        default: 'PrebuiltTEST'
+
+      DEVICE_PATH:
+        description: 'Specify your device path.'
+        required: true
+        default: 'device/tecno/KJ5'
+
+      DEVICE_NAME:
+        description: 'Specify your Device Codename.'
+        required: true
+        default: 'KJ5'
+
+      BUILD_TARGET:
+        description: 'Specify your Build Target'
+        required: true
+        default: 'vendorboot'
+        type: choice
+        options:
+        - boot
+        - recovery
+        - vendorboot
+
+      RECOVERY_TAR:
+        description: 'Release recovery.tar For Samsung devices'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  build:
+    name: Build TWRP by ${{ github.actor }}
+
+    runs-on: ubuntu-22.04
+
+    if: github.event.repository.owner.id == github.event.sender.id
+
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Clean-up
+      uses: rokibhasansagar/slimhub_actions@main
+
+    - name: Swap Space
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 24
+
+    # ✅ FAST BUILD ENVIRONMENT
+    - name: Build Environment
+      run: |
+        sudo apt update
+
+        sudo apt install -y \
+          git-core gnupg flex bison build-essential zip curl \
+          zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 \
+          lib32ncurses5-dev x11proto-core-dev libx11-dev \
+          lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc \
+          unzip fontconfig openjdk-11-jdk python3 python-is-python3 \
+          adb fastboot ccache
+
+        # Install repo tool
+        mkdir -p ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        echo "$HOME/bin" >> $GITHUB_PATH
+
+        git config --global color.ui false
+        git config --global core.compression 0
+        git config --global http.postBuffer 157286400
+
+    # ✅ TWRP MANIFEST
+    - name: Set-up Manifest
+      run: |
+        mkdir -p ${GITHUB_WORKSPACE}/TWRP
+
+        cd ${GITHUB_WORKSPACE}/TWRP
+
+        repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b ${{ github.event.inputs.MANIFEST_BRANCH }}
+
+        repo sync -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+
+    - name: Clone Device Tree
+      run: |
+        cd ${GITHUB_WORKSPACE}/TWRP
+
+        git clone \
+        ${{ github.event.inputs.DEVICE_TREE }} \
+        -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} \
+        ./${{ github.event.inputs.DEVICE_PATH }}
+
+        cd ${{ github.event.inputs.DEVICE_PATH }}
+
+        echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
+
+    # ✅ CCACHE
+    - name: Setup ccache
+      uses: actions/cache@v4
+      with:
+        path: ~/.ccache
+        key: ${{ runner.os }}-ccache-${{ github.event.inputs.DEVICE_NAME }}
+        restore-keys: |
+          ${{ runner.os }}-ccache-
+
+    # ✅ BUILD TWRP
+    - name: Building TWRP
+      run: |
+        cd ${GITHUB_WORKSPACE}/TWRP
+
+        export ALLOW_MISSING_DEPENDENCIES=true
+
+        export USE_CCACHE=1
+        export CCACHE_EXEC=$(which ccache)
+
+        ccache -M 10G
+
+        source build/envsetup.sh
+
+        lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng
+
+        make clean
+
+        mka ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
+
+    - name: Set Build Date
+      run: |
+        echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
+
+    # ✅ FIND OUTPUT
+    - name: Check if Recovery Exist
+      run: |
+        cd ${GITHUB_WORKSPACE}/TWRP
+
+        if [ -f out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img ]; then
+
+            echo "CHECK_IMG_IS_OK=true" >> $GITHUB_ENV
+
+            echo "FILE_PATH=${GITHUB_WORKSPACE}/TWRP/out/target/product/${{ github.event.inputs.DEVICE_NAME }}" >> $GITHUB_ENV
+
+            echo "MD5_IMG=$(md5sum out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img | cut -d ' ' -f 1)" >> $GITHUB_ENV
+
+        else
+            echo "Recovery output not found."
+            exit 1
+        fi
+
+    # ✅ RENAME
+    - name: Rename Recovery
+      run: |
+        cd ${{ env.FILE_PATH }}
+
+        if [ "${{ github.event.inputs.BUILD_TARGET }}" = "vendorboot" ]; then
+          mv vendorboot.img vendor_boot.img
+          echo "RECOVERY_TYPE=vendor_boot" >> $GITHUB_ENV
+
+        else
+          echo "RECOVERY_TYPE=${{ github.event.inputs.BUILD_TARGET }}" >> $GITHUB_ENV
+        fi
+
+    # ✅ TAR
+    - name: Recovery to tar
+      run: |
+        if [ ${{ github.event.inputs.RECOVERY_TAR }} = true ]; then
+
+          cd ${{ env.FILE_PATH }}
+
+          tar -cvf ${{ env.RECOVERY_TYPE }}.tar ${{ env.RECOVERY_TYPE }}.img
+
+        fi
+      continue-on-error: true
+
+    # ✅ RELEASE
+    - name: Upload to Release
+      if: env.CHECK_IMG_IS_OK == 'true'
+      uses: softprops/action-gh-release@v1
+
+      with:
+        files: |
+          ${{ env.FILE_PATH }}/${{ env.RECOVERY_TYPE }}.img
+          ${{ env.FILE_PATH }}/${{ env.RECOVERY_TYPE }}.tar
+
+        name: 🔷 TWRP-${{ github.event.inputs.DEVICE_NAME }}-${{ env.BUILD_DATE }}
+
+        tag_name: ${{ github.run_id }}
+
+        body: |
+          # 🔷 TeamWin Recovery Project (Unofficial)
+
+          ### 📱 Device: TECNO-${{ github.event.inputs.DEVICE_NAME }}
+
+          ![Branch](https://img.shields.io/badge/Branch-${{ github.event.inputs.MANIFEST_BRANCH }}-blue)
+          ![Build](https://img.shields.io/badge/Build-${{ github.event.inputs.BUILD_TARGET }}-green)
+          ![Status](https://img.shields.io/badge/Status-Success-brightgreen)
+
+          ---
+
+          ## 📦 Build Information
+
+          - **Build Date:** `${{ env.BUILD_DATE }}`
+          - **Branch:** `${{ github.event.inputs.MANIFEST_BRANCH }}`
+          - **Build Type:** `${{ github.event.inputs.BUILD_TARGET }}`
+
+          ---
+
+          ## 🌿 Source Information
+
+          - **Device Tree:** [Open](${{ github.event.inputs.DEVICE_TREE }})
+          - **Branch:** `${{ github.event.inputs.DEVICE_TREE_BRANCH }}`
+          - **Commit:** [View Commit](${{ github.event.inputs.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }})
+
+          ---
+
+          ## 🔐 MD5
+
+          ```
+          ${{ env.MD5_IMG }}
+          ```
+
+          ---
+
+          ⚠️ Automated unofficial build. Flash at your own risk.
