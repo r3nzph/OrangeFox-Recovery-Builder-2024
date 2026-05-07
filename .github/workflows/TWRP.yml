@@ -1,4 +1,4 @@
-name: TWRP
+name: TWRP - V2001PrebuiltK
 
 on:
   workflow_dispatch:
@@ -93,7 +93,7 @@ jobs:
       with:
         swap-size-gb: 24
 
-    # ✅ FAST BUILD ENVIRONMENT
+    # ✅ FAST + FIXED BUILD ENVIRONMENT
     - name: Build Environment
       run: |
         sudo apt update
@@ -104,7 +104,7 @@ jobs:
           lib32ncurses5-dev x11proto-core-dev libx11-dev \
           lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc \
           unzip fontconfig openjdk-11-jdk python3 python-is-python3 \
-          adb fastboot ccache
+          adb fastboot
 
         # Install repo tool
         mkdir -p ~/bin
@@ -117,7 +117,6 @@ jobs:
         git config --global core.compression 0
         git config --global http.postBuffer 157286400
 
-    # ✅ TWRP MANIFEST
     - name: Set-up Manifest
       if: github.event.inputs.MANIFEST_BRANCH == '11.0' || github.event.inputs.MANIFEST_BRANCH == '12.1'
       run: |
@@ -158,34 +157,13 @@ jobs:
         if_true: lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng && make clean && mka adbd ${{ github.event.inputs.BUILD_TARGET }}image
         if_false: lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng && make clean && mka ${{ github.event.inputs.BUILD_TARGET }}image
 
-    # ✅ FIXED CCACHE
-    - name: Setup ccache
-      uses: actions/cache@v4
-      with:
-        path: ${{ github.workspace }}/.ccache
-        key: ${{ runner.os }}-ccache-${{ github.event.inputs.DEVICE_NAME }}
-        restore-keys: |
-          ${{ runner.os }}-ccache-
-
-    # ✅ BUILD TWRP
     - name: Building TWRP
       run: |
         cd ${GITHUB_WORKSPACE}/TWRP
 
-        export ALLOW_MISSING_DEPENDENCIES=true
-
-        # ✅ Writable ccache directory
-        export CCACHE_DIR=${GITHUB_WORKSPACE}/.ccache
-
-        mkdir -p ${CCACHE_DIR}
-
-        export USE_CCACHE=1
-        export CCACHE_EXEC=$(which ccache)
-
-        ccache -M 10G
-
         set +e
         source build/envsetup.sh
+        export ALLOW_MISSING_DEPENDENCIES=true
         set -e
 
         ${{ steps.fox_branch.outputs.value }} -j$(nproc --all)
@@ -194,7 +172,6 @@ jobs:
       run: |
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
-    # ✅ CHECK OUTPUT
     - name: Check if Recovery Exist
       run: |
         cd ${GITHUB_WORKSPACE}/TWRP
@@ -220,7 +197,6 @@ jobs:
             exit 1
         fi
 
-    # ✅ RENAME
     - name: Rename the Recovery
       run: |
         cd ${{ env.FILE_PATH }}/
@@ -268,7 +244,7 @@ jobs:
         fi
       continue-on-error: true
 
-    # ✅ RELEASE
+    # ✅ UPGRADED RELEASE
     - name: Upload to Release
       if: env.CHECK_IMG_IS_OK == 'true'
       uses: softprops/action-gh-release@v1
