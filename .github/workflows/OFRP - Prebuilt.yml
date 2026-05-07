@@ -1,4 +1,4 @@
-name: OrangeFox - V2001-Prebuilt
+name: OrangeFox - V2001PrebuiltK
 
 on:
   workflow_dispatch:
@@ -20,7 +20,7 @@ on:
       DEVICE_TREE_BRANCH:
         description: 'Custom Recovery Tree Branch'
         required: true
-        default: 'PrebuiltTEST'
+        default: 'Prebuilt'
 
       DEVICE_PATH:
         description: 'Specify your device path.'
@@ -93,7 +93,7 @@ jobs:
       with:
         swap-size-gb: 24
 
-    # ✅ FAST BUILD ENVIRONMENT
+    # ✅ FAST + FIXED BUILD ENVIRONMENT
     - name: Build Environment
       run: |
         sudo apt update
@@ -118,9 +118,8 @@ jobs:
         git config --global http.postBuffer 157286400
 
         # Clone OrangeFox scripts
-        git clone --depth=1 https://gitlab.com/OrangeFox/misc/scripts
+        git clone https://gitlab.com/OrangeFox/misc/scripts
 
-    # ✅ FASTER MANIFEST SYNC
     - name: Set-up Manifest
       if: github.event.inputs.MANIFEST_BRANCH == '11.0' || github.event.inputs.MANIFEST_BRANCH == '12.1'
       run: |
@@ -131,11 +130,9 @@ jobs:
         git config --global user.name "r3nzph"
         git config --global user.email "abarracosorenznino@gmail.com"
 
-        git clone --depth=1 https://gitlab.com/OrangeFox/sync.git
+        git clone https://gitlab.com/OrangeFox/sync.git
 
         cd sync
-
-        export SYNC_OPTIONS="--current-branch --no-tags --optimized-fetch --prune --no-clone-bundle --depth=1 -j$(nproc --all)"
 
         ./orangefox_sync.sh \
         --branch ${{ github.event.inputs.MANIFEST_BRANCH }} \
@@ -162,36 +159,16 @@ jobs:
         if_true: lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng && make clean && mka adbd ${{ github.event.inputs.BUILD_TARGET }}image
         if_false: lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng && make clean && mka ${{ github.event.inputs.BUILD_TARGET }}image
 
-    # ✅ CCACHE
-    - name: Setup ccache
-      uses: actions/cache@v4
-      with:
-        path: ~/.ccache
-        key: ${{ runner.os }}-ccache-${{ github.event.inputs.DEVICE_NAME }}
-        restore-keys: |
-          ${{ runner.os }}-ccache-
-
-    # ✅ FASTER BUILDING
     - name: Building OrangeFox
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
 
-        export ALLOW_MISSING_DEPENDENCIES=true
-
-        # Enable ccache
-        export USE_CCACHE=1
-        export CCACHE_EXEC=$(which ccache)
-
-        ccache -M 10G
-
-        # Faster parallel builds
-        export FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER=1
-
         set +e
         source build/envsetup.sh
+        export ALLOW_MISSING_DEPENDENCIES=true
         set -e
 
-        ${{ steps.fox_branch.outputs.value }} -j$(nproc --all)
+        ${{ steps.fox_branch.outputs.value }}
 
     - name: Set Build Date
       run: |
