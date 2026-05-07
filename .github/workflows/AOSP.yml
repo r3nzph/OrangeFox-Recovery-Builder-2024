@@ -1,0 +1,382 @@
+name: Android13 VendorBoot Recovery Builder
+
+on:
+  workflow_dispatch:
+    inputs:
+
+      ROM_MANIFEST:
+        description: 'ROM Manifest URL'
+        required: true
+        default: 'https://github.com/PixelExperience/manifest'
+
+      ROM_BRANCH:
+        description: 'ROM Branch'
+        required: true
+        default: 'thirteen'
+
+      DEVICE_TREE:
+        description: 'Device Tree URL'
+        required: true
+        default: 'https://github.com/YOUR_USERNAME/device_tree.git'
+
+      DEVICE_TREE_BRANCH:
+        description: 'Device Tree Branch'
+        required: true
+        default: 'android-13'
+
+      DEVICE_PATH:
+        description: 'Device Path'
+        required: true
+        default: 'device/tecno/KJ5'
+
+      LUNCH_TARGET:
+        description: 'Lunch Target'
+        required: true
+        default: 'aosp_KJ5-userdebug'
+
+      BUILD_TARGET:
+        description: 'Build Target'
+        required: true
+        default: 'vendorbootimage'
+        type: choice
+        options:
+          - vendorbootimage
+          - recoveryimage
+          - bootimage
+
+      MAKE_CLEAN:
+        description: 'Run make clean'
+        required: true
+        default: false
+        type: boolean
+
+      ENABLE_CCACHE:
+        description: 'Enable CCache'
+        required: true
+        default: true
+        type: boolean
+
+      CREATE_FLASHABLE_ZIP:
+        description: 'Create Flashable ZIP'
+        required: true
+        default: true
+        type: boolean
+
+      CREATE_FASTBOOT_PACKAGE:
+        description: 'Create Fastboot Package'
+        required: true
+        default: true
+        type: boolean
+
+      TELEGRAM_UPLOAD:
+        description: 'Upload to Telegram'
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  build:
+    name: Build Recovery
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    env:
+      ALLOW_MISSING_DEPENDENCIES: true
+      USE_CCACHE: 1
+      CCACHE_DIR: /tmp/ccache
+      CCACHE_COMPRESS: "true"
+      CCACHE_COMPRESSLEVEL: "1"
+      CCACHE_MAXSIZE: 15G
+
+    steps:
+
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    # MASSIVE CLEANUP
+    - name: Free Disk Space
+      run: |
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/hostedtoolcache/CodeQL
+        sudo docker system prune -af
+        sudo apt clean
+
+        df -h
+
+    # HUGE SWAP
+    - name: Setup Swap
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 24
+
+    # DEPENDENCIES
+    - name: Install Dependencies
+      run: |
+        sudo apt update
+
+        sudo apt install -y \
+          git-core gnupg flex bison build-essential zip curl \
+          zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 \
+          lib32ncurses6 lib32z1 liblz4-tool \
+          x11proto-core-dev libx11-dev libgl1-mesa-dev \
+          libxml2-utils xsltproc unzip fontconfig \
+          openjdk-11-jdk python3 python-is-python3 \
+          adb fastboot ccache jq aria2 rsync \
+          bc bison gperf imagemagick \
+          lib32readline-dev libncurses5-dev \
+          libsdl1.2-dev libssl-dev lzop pngcrush \
+          schedtool squashfs-tools zip zlib1g-dev
+
+    # REPO TOOL
+    - name: Setup Repo
+      run: |
+        mkdir -p ~/bin
+
+        curl -fsSL \
+        https://storage.googleapis.com/git-repo-downloads/repo \
+        > ~/bin/repo
+
+        chmod a+x ~/bin/repo
+
+        echo "$HOME/bin" >> $GITHUB_PATH
+
+    # GIT OPTIMIZATION
+    - name: Git Optimization
+      run: |
+        git config --global color.ui false
+        git config --global core.compression 0
+        git config --global http.postBuffer 157286400
+        git config --global gc.auto 1024
+
+    # CCACHE
+    - name: Restore CCache
+      if: github.event.inputs.ENABLE_CCACHE == 'true'
+      uses: actions/cache@v4
+      with:
+        path: /tmp/ccache
+        key: ccache-${{ github.run_id }}
+        restore-keys: |
+          ccache-
+
+    # INITIALIZE SOURCE
+    - name: Initialize ROM Source
+      run: |
+        mkdir -p workspace
+        cd workspace
+
+        repo init \
+          --depth=1 \
+          --no-repo-verify \
+          -u ${{ github.event.inputs.ROM_MANIFEST }} \
+          -b ${{ github.event.inputs.ROM_BRANCH }}
+
+    # FAST SYNC
+    - name: Sync Sources
+      run: |
+        cd workspace
+
+        repo sync -c \
+          --no-clone-bundle \
+          --no-tags \
+          --optimized-fetch \
+          --prune \
+          --force-sync \
+          -j$(nproc --all)
+
+    # DEVICE TREE
+    - name: Clone Device Tree
+      run: |
+        cd workspace
+
+        git clone \
+          --depth=1 \
+          -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} \
+          ${{ github.event.inputs.DEVICE_TREE }} \
+          ${{ github.event.inputs.DEVICE_PATH }}
+
+    # OPTIONAL CLEAN
+    - name: Optional Make Clean
+      if: github.event.inputs.MAKE_CLEAN == 'true'
+      run: |
+        cd workspace
+
+        source build/envsetup.sh
+
+        lunch ${{ github.event.inputs.LUNCH_TARGET }}
+
+        make clean
+
+    # BUILD
+    - name: Build Recovery
+      run: |
+        cd workspace
+
+        export ALLOW_MISSING_DEPENDENCIES=true
+        export LC_ALL=C
+        export USE_CCACHE=1
+
+        ccache -M 15G
+
+        source build/envsetup.sh
+
+        lunch ${{ github.event.inputs.LUNCH_TARGET }}
+
+        mka ${{ github.event.inputs.BUILD_TARGET }} -j$(nproc --all)
+
+    # DETECT OUTPUT
+    - name: Detect Build Output
+      run: |
+        cd workspace/out/target/product/*
+
+        mkdir -p release
+
+        if [ -f vendor_boot.img ]; then
+
+          cp vendor_boot.img release/
+
+          echo "OUTPUT=vendor_boot.img" >> $GITHUB_ENV
+
+        elif [ -f recovery.img ]; then
+
+          cp recovery.img release/
+
+          echo "OUTPUT=recovery.img" >> $GITHUB_ENV
+
+        elif [ -f boot.img ]; then
+
+          cp boot.img release/
+
+          echo "OUTPUT=boot.img" >> $GITHUB_ENV
+
+        else
+          echo "No output image found."
+          exit 1
+        fi
+
+    # FILE INFO
+    - name: Recovery Information
+      run: |
+        cd workspace/out/target/product/*/release
+
+        ls -lh
+
+        file *.img || true
+
+        md5sum *.img > md5.txt
+
+    # ANYKERNEL3 ZIP
+    - name: Create Flashable ZIP
+      if: github.event.inputs.CREATE_FLASHABLE_ZIP == 'true'
+      run: |
+        cd workspace
+
+        git clone \
+          --depth=1 \
+          https://github.com/osm0sis/AnyKernel3.git
+
+        cd out/target/product/*/release
+
+        cp *.img ../../../../AnyKernel3/
+
+        cd ../../../../AnyKernel3
+
+        zip -r9 Recovery-Flashable.zip * \
+          -x .git README.md LICENSE
+
+        mv Recovery-Flashable.zip \
+          ../out/target/product/*/release/
+
+      continue-on-error: true
+
+    # FASTBOOT PACKAGE
+    - name: Create Fastboot Package
+      if: github.event.inputs.CREATE_FASTBOOT_PACKAGE == 'true'
+      run: |
+        cd workspace/out/target/product/*/release
+
+        mkdir fastboot_package
+
+        cp *.img fastboot_package/
+
+        echo "fastboot flash vendor_boot ${{ env.OUTPUT }}" \
+          > fastboot_package/flash-linux.sh
+
+        echo "fastboot flash vendor_boot ${{ env.OUTPUT }}" \
+          > fastboot_package/flash-windows.bat
+
+        chmod +x fastboot_package/flash-linux.sh
+
+        zip -r9 fastboot_package.zip fastboot_package
+
+      continue-on-error: true
+
+    # BUILD DATE
+    - name: Set Build Date
+      run: |
+        echo "BUILD_DATE=$(date +%Y%m%d-%H%M)" >> $GITHUB_ENV
+
+    # TELEGRAM
+    - name: Upload to Telegram
+      if: github.event.inputs.TELEGRAM_UPLOAD == 'true'
+      run: |
+        cd workspace/out/target/product/*/release
+
+        for file in *; do
+
+          curl -F document=@"$file" \
+          "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument?chat_id=${{ secrets.TELEGRAM_CHAT_ID }}"
+
+        done
+
+      continue-on-error: true
+
+    # GITHUB RELEASE
+    - name: Upload Release
+      uses: softprops/action-gh-release@v2
+
+      with:
+        tag_name: ${{ github.run_id }}
+
+        name: |
+          Android13-Recovery-${{ env.BUILD_DATE }}
+
+        files: |
+          workspace/out/target/product/*/release/*
+
+        body: |
+          # Android 13 VendorBoot Recovery
+
+          ## Build Information
+
+          - ROM Branch:
+            `${{ github.event.inputs.ROM_BRANCH }}`
+
+          - Build Target:
+            `${{ github.event.inputs.BUILD_TARGET }}`
+
+          - Lunch Target:
+            `${{ github.event.inputs.LUNCH_TARGET }}`
+
+          ## Included Files
+
+          ✅ Recovery Image
+
+          ✅ Flashable ZIP
+
+          ✅ Fastboot Package
+
+          ✅ MD5 Hashes
+
+          ✅ Optimized Build
+
+          ## Flash Command
+
+          ```bash
+          fastboot flash vendor_boot vendor_boot.img
+          ```
+
+          Automated GitHub Actions build.
