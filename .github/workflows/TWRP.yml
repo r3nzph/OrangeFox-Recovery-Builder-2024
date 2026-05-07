@@ -1,4 +1,4 @@
-name: TWRP - V2001PrebuiltK
+name: TWRP
 
 on:
   workflow_dispatch:
@@ -20,7 +20,7 @@ on:
       DEVICE_TREE_BRANCH:
         description: 'Custom Recovery Tree Branch'
         required: true
-        default: 'PrebuiltTEST'
+        default: 'TWRP-Prebuilt'
 
       DEVICE_PATH:
         description: 'Specify your device path.'
