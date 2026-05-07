@@ -93,7 +93,7 @@ jobs:
       with:
         swap-size-gb: 24
 
-    # ✅ FAST + FIXED BUILD ENVIRONMENT
+    # ✅ FAST BUILD ENVIRONMENT
     - name: Build Environment
       run: |
         sudo apt update
@@ -117,6 +117,7 @@ jobs:
         git config --global core.compression 0
         git config --global http.postBuffer 157286400
 
+    # ✅ TWRP MANIFEST
     - name: Set-up Manifest
       if: github.event.inputs.MANIFEST_BRANCH == '11.0' || github.event.inputs.MANIFEST_BRANCH == '12.1'
       run: |
@@ -127,9 +128,14 @@ jobs:
         git config --global user.name "r3nzph"
         git config --global user.email "abarracosorenznino@gmail.com"
 
-        repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-${{ github.event.inputs.MANIFEST_BRANCH }}
+        repo init --depth=1 \
+          -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
+          -b twrp-${{ github.event.inputs.MANIFEST_BRANCH }}
 
-        repo sync -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+        repo sync -j$(nproc --all) \
+          --force-sync \
+          --no-clone-bundle \
+          --no-tags
 
     - name: Clone Device Tree
       run: |
@@ -152,13 +158,27 @@ jobs:
         if_true: lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng && make clean && mka adbd ${{ github.event.inputs.BUILD_TARGET }}image
         if_false: lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng && make clean && mka ${{ github.event.inputs.BUILD_TARGET }}image
 
+    # ✅ FIXED CCACHE
+    - name: Setup ccache
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}/.ccache
+        key: ${{ runner.os }}-ccache-${{ github.event.inputs.DEVICE_NAME }}
+        restore-keys: |
+          ${{ runner.os }}-ccache-
+
+    # ✅ BUILD TWRP
     - name: Building TWRP
       run: |
         cd ${GITHUB_WORKSPACE}/TWRP
 
         export ALLOW_MISSING_DEPENDENCIES=true
 
-        # Enable ccache
+        # ✅ Writable ccache directory
+        export CCACHE_DIR=${GITHUB_WORKSPACE}/.ccache
+
+        mkdir -p ${CCACHE_DIR}
+
         export USE_CCACHE=1
         export CCACHE_EXEC=$(which ccache)
 
@@ -174,6 +194,7 @@ jobs:
       run: |
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
+    # ✅ CHECK OUTPUT
     - name: Check if Recovery Exist
       run: |
         cd ${GITHUB_WORKSPACE}/TWRP
@@ -199,6 +220,7 @@ jobs:
             exit 1
         fi
 
+    # ✅ RENAME
     - name: Rename the Recovery
       run: |
         cd ${{ env.FILE_PATH }}/
@@ -212,6 +234,10 @@ jobs:
           echo "RECOVERY_TYPE=recovery" >> $GITHUB_ENV
 
         elif [ "${{ github.event.inputs.BUILD_TARGET }}" = "vendorboot" ]; then
+
+          if [ -f vendorboot.img ]; then
+            mv vendorboot.img vendor_boot.img
+          fi
 
           echo "RECOVERY_TYPE=vendor_boot" >> $GITHUB_ENV
 
@@ -242,7 +268,7 @@ jobs:
         fi
       continue-on-error: true
 
-    # ✅ UPGRADED RELEASE
+    # ✅ RELEASE
     - name: Upload to Release
       if: env.CHECK_IMG_IS_OK == 'true'
       uses: softprops/action-gh-release@v1
