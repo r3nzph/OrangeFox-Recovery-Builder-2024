@@ -4,30 +4,39 @@ on:
   workflow_dispatch:
     inputs:
 
+      MANIFEST_BRANCH:
+        description: 'Android Branch'
+        required: true
+        default: 'thirteen'
+        type: choice
+        options:
+        - thirteen
+        - thirteen-plus
+
       ROM_MANIFEST:
         description: 'ROM Manifest URL'
         required: true
         default: 'https://github.com/PixelExperience/manifest'
 
-      ROM_BRANCH:
-        description: 'ROM Branch'
-        required: true
-        default: 'thirteen'
-
       DEVICE_TREE:
-        description: 'Device Tree URL'
+        description: 'Custom Recovery Tree'
         required: true
-        default: 'https://github.com/YOUR_USERNAME/device_tree.git'
+        default: 'https://github.com/r3nzph/twrp-device_tecno_TECNO-KJ5-v2001.git'
 
       DEVICE_TREE_BRANCH:
-        description: 'Device Tree Branch'
+        description: 'Custom Recovery Tree Branch'
         required: true
-        default: 'android-13'
+        default: 'Prebuilt'
 
       DEVICE_PATH:
-        description: 'Device Path'
+        description: 'Specify your device path.'
         required: true
         default: 'device/tecno/KJ5'
+
+      DEVICE_NAME:
+        description: 'Specify your Device Codename.'
+        required: true
+        default: 'KJ5'
 
       LUNCH_TARGET:
         description: 'Lunch Target'
@@ -35,14 +44,19 @@ on:
         default: 'aosp_KJ5-userdebug'
 
       BUILD_TARGET:
-        description: 'Build Target'
+        description: 'Specify your Build Target'
         required: true
         default: 'vendorbootimage'
         type: choice
         options:
-          - vendorbootimage
-          - recoveryimage
-          - bootimage
+        - vendorbootimage
+        - recoveryimage
+        - bootimage
+
+      LDCHECK:
+        description: 'Path of blobs to check'
+        required: true
+        default: 'system/bin/qseecomd'
 
       MAKE_CLEAN:
         description: 'Run make clean'
@@ -56,14 +70,20 @@ on:
         default: true
         type: boolean
 
-      CREATE_FLASHABLE_ZIP:
-        description: 'Create Flashable ZIP'
-        required: true
-        default: true
+      RECOVERY_TAR:
+        description: 'Release recovery.tar'
+        required: false
+        default: false
         type: boolean
 
-      CREATE_FASTBOOT_PACKAGE:
-        description: 'Create Fastboot Package'
+      RECOVERY_INSTALLER:
+        description: 'Include recovery installer zip'
+        type: boolean
+        required: true
+        default: true
+
+      FASTBOOT_PACKAGE:
+        description: 'Create fastboot package'
         required: true
         default: true
         type: boolean
@@ -76,13 +96,17 @@ on:
 
 jobs:
   build:
-    name: Build Recovery
+    name: Build Recovery by ${{ github.actor }}
+
     runs-on: ubuntu-latest
+
+    if: github.event.repository.owner.id == github.event.sender.id
 
     permissions:
       contents: write
 
     env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ALLOW_MISSING_DEPENDENCIES: true
       USE_CCACHE: 1
       CCACHE_DIR: /tmp/ccache
@@ -95,26 +119,46 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    # MASSIVE CLEANUP
+    # DISPLAY INPUTS
+    - name: Display Inputs
+      run: |
+        echo "::group::Inputs"
+
+        echo "Manifest Branch: ${{ github.event.inputs.MANIFEST_BRANCH }}"
+        echo "Build Target: ${{ github.event.inputs.BUILD_TARGET }}"
+        echo "Lunch Target: ${{ github.event.inputs.LUNCH_TARGET }}"
+        echo "Recovery Installer: ${{ github.event.inputs.RECOVERY_INSTALLER }}"
+        echo "Fastboot Package: ${{ github.event.inputs.FASTBOOT_PACKAGE }}"
+        echo "Telegram Upload: ${{ github.event.inputs.TELEGRAM_UPLOAD }}"
+
+        echo "::endgroup::"
+
+    # CLEANUP
+    - name: Clean-up
+      uses: rokibhasansagar/slimhub_actions@main
+
+    # EXTRA CLEANUP
     - name: Free Disk Space
       run: |
         sudo rm -rf /usr/share/dotnet
         sudo rm -rf /opt/ghc
         sudo rm -rf /usr/local/lib/android
         sudo rm -rf /opt/hostedtoolcache/CodeQL
+
         sudo docker system prune -af
+
         sudo apt clean
 
         df -h
 
-    # HUGE SWAP
-    - name: Setup Swap
+    # SWAP
+    - name: Swap Space
       uses: pierotofy/set-swap-space@master
       with:
         swap-size-gb: 24
 
-    # DEPENDENCIES
-    - name: Install Dependencies
+    # BUILD ENVIRONMENT
+    - name: Build Environment
       run: |
         sudo apt update
 
@@ -131,9 +175,7 @@ jobs:
           libsdl1.2-dev libssl-dev lzop pngcrush \
           schedtool squashfs-tools zip zlib1g-dev
 
-    # REPO TOOL
-    - name: Setup Repo
-      run: |
+        # REPO TOOL
         mkdir -p ~/bin
 
         curl -fsSL \
@@ -144,9 +186,7 @@ jobs:
 
         echo "$HOME/bin" >> $GITHUB_PATH
 
-    # GIT OPTIMIZATION
-    - name: Git Optimization
-      run: |
+        # GIT OPTIMIZATION
         git config --global color.ui false
         git config --global core.compression 0
         git config --global http.postBuffer 157286400
@@ -163,21 +203,25 @@ jobs:
           ccache-
 
     # INITIALIZE SOURCE
-    - name: Initialize ROM Source
+    - name: Set-up Manifest
       run: |
-        mkdir -p workspace
-        cd workspace
+        mkdir -p ${GITHUB_WORKSPACE}/workspace
+
+        cd ${GITHUB_WORKSPACE}/workspace
+
+        git config --global user.name "github-actions"
+        git config --global user.email "actions@github.com"
 
         repo init \
           --depth=1 \
           --no-repo-verify \
           -u ${{ github.event.inputs.ROM_MANIFEST }} \
-          -b ${{ github.event.inputs.ROM_BRANCH }}
+          -b ${{ github.event.inputs.MANIFEST_BRANCH }}
 
     # FAST SYNC
     - name: Sync Sources
       run: |
-        cd workspace
+        cd ${GITHUB_WORKSPACE}/workspace
 
         repo sync -c \
           --no-clone-bundle \
@@ -190,19 +234,23 @@ jobs:
     # DEVICE TREE
     - name: Clone Device Tree
       run: |
-        cd workspace
+        cd ${GITHUB_WORKSPACE}/workspace
 
         git clone \
-          --depth=1 \
-          -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} \
-          ${{ github.event.inputs.DEVICE_TREE }} \
-          ${{ github.event.inputs.DEVICE_PATH }}
+        --depth=1 \
+        ${{ github.event.inputs.DEVICE_TREE }} \
+        -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} \
+        ./${{ github.event.inputs.DEVICE_PATH }}
+
+        cd ${{ github.event.inputs.DEVICE_PATH }}
+
+        echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
 
     # OPTIONAL CLEAN
     - name: Optional Make Clean
       if: github.event.inputs.MAKE_CLEAN == 'true'
       run: |
-        cd workspace
+        cd ${GITHUB_WORKSPACE}/workspace
 
         source build/envsetup.sh
 
@@ -213,7 +261,7 @@ jobs:
     # BUILD
     - name: Build Recovery
       run: |
-        cd workspace
+        cd ${GITHUB_WORKSPACE}/workspace
 
         export ALLOW_MISSING_DEPENDENCIES=true
         export LC_ALL=C
@@ -227,86 +275,82 @@ jobs:
 
         mka ${{ github.event.inputs.BUILD_TARGET }} -j$(nproc --all)
 
-    # DETECT OUTPUT
-    - name: Detect Build Output
+    # BUILD DATE
+    - name: Set Build Date
       run: |
-        cd workspace/out/target/product/*
+        echo "BUILD_DATE=$(date +%Y%m%d-%H%M)" >> $GITHUB_ENV
 
-        mkdir -p release
+    # CHECK OUTPUT
+    - name: Check if Recovery Exist
+      run: |
+        cd ${GITHUB_WORKSPACE}/workspace
 
-        if [ -f vendor_boot.img ]; then
+        if [ -f out/target/product/${{ github.event.inputs.DEVICE_NAME }}/vendor_boot.img ]; then
 
-          cp vendor_boot.img release/
+            echo "CHECK_IMG_IS_OK=true" >> $GITHUB_ENV
 
-          echo "OUTPUT=vendor_boot.img" >> $GITHUB_ENV
+            echo "FILE_PATH=${GITHUB_WORKSPACE}/workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}" >> $GITHUB_ENV
 
-        elif [ -f recovery.img ]; then
+            echo "OUTPUT=vendor_boot.img" >> $GITHUB_ENV
 
-          cp recovery.img release/
+        elif [ -f out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery.img ]; then
 
-          echo "OUTPUT=recovery.img" >> $GITHUB_ENV
+            echo "CHECK_IMG_IS_OK=true" >> $GITHUB_ENV
 
-        elif [ -f boot.img ]; then
+            echo "FILE_PATH=${GITHUB_WORKSPACE}/workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}" >> $GITHUB_ENV
 
-          cp boot.img release/
+            echo "OUTPUT=recovery.img" >> $GITHUB_ENV
 
-          echo "OUTPUT=boot.img" >> $GITHUB_ENV
+        elif [ -f out/target/product/${{ github.event.inputs.DEVICE_NAME }}/boot.img ]; then
+
+            echo "CHECK_IMG_IS_OK=true" >> $GITHUB_ENV
+
+            echo "FILE_PATH=${GITHUB_WORKSPACE}/workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}" >> $GITHUB_ENV
+
+            echo "OUTPUT=boot.img" >> $GITHUB_ENV
 
         else
-          echo "No output image found."
-          exit 1
+            echo "Recovery output not found."
+            exit 1
         fi
 
-    # FILE INFO
-    - name: Recovery Information
+    # MD5
+    - name: Generate MD5
       run: |
-        cd workspace/out/target/product/*/release
+        cd ${{ env.FILE_PATH }}
 
-        ls -lh
+        md5sum ${{ env.OUTPUT }} | cut -d ' ' -f 1 > md5.txt
 
-        file *.img || true
+        echo "MD5_IMG=$(cat md5.txt)" >> $GITHUB_ENV
 
-        md5sum *.img > md5.txt
-
-    # ANYKERNEL3 ZIP
-    - name: Create Flashable ZIP
-      if: github.event.inputs.CREATE_FLASHABLE_ZIP == 'true'
+    # RECOVERY INSTALLER
+    - name: Include Recovery Installer
+      if: github.event.inputs.RECOVERY_INSTALLER == 'true'
       run: |
-        cd workspace
+        cd ${{ env.FILE_PATH }}
 
-        git clone \
-          --depth=1 \
-          https://github.com/osm0sis/AnyKernel3.git
+        wget -O recovery-installer.zip \
+        https://github.com/kinguser981/recovery-installer/releases/download/11256427880/recovery-installer.zip
 
-        cd out/target/product/*/release
-
-        cp *.img ../../../../AnyKernel3/
-
-        cd ../../../../AnyKernel3
-
-        zip -r9 Recovery-Flashable.zip * \
-          -x .git README.md LICENSE
-
-        mv Recovery-Flashable.zip \
-          ../out/target/product/*/release/
+        zip -ur recovery-installer.zip ${{ env.OUTPUT }}
 
       continue-on-error: true
 
     # FASTBOOT PACKAGE
     - name: Create Fastboot Package
-      if: github.event.inputs.CREATE_FASTBOOT_PACKAGE == 'true'
+      if: github.event.inputs.FASTBOOT_PACKAGE == 'true'
       run: |
-        cd workspace/out/target/product/*/release
+        cd ${{ env.FILE_PATH }}
 
-        mkdir fastboot_package
+        mkdir -p fastboot_package
 
-        cp *.img fastboot_package/
-
-        echo "fastboot flash vendor_boot ${{ env.OUTPUT }}" \
-          > fastboot_package/flash-linux.sh
+        cp ${{ env.OUTPUT }} fastboot_package/
 
         echo "fastboot flash vendor_boot ${{ env.OUTPUT }}" \
-          > fastboot_package/flash-windows.bat
+        > fastboot_package/flash-linux.sh
+
+        echo "fastboot flash vendor_boot ${{ env.OUTPUT }}" \
+        > fastboot_package/flash-windows.bat
 
         chmod +x fastboot_package/flash-linux.sh
 
@@ -314,16 +358,43 @@ jobs:
 
       continue-on-error: true
 
-    # BUILD DATE
-    - name: Set Build Date
+    # TAR
+    - name: Recovery to tar
+      if: github.event.inputs.RECOVERY_TAR == 'true'
       run: |
-        echo "BUILD_DATE=$(date +%Y%m%d-%H%M)" >> $GITHUB_ENV
+        cd ${{ env.FILE_PATH }}
+
+        tar -cvf recovery.tar ${{ env.OUTPUT }}
+
+      continue-on-error: true
+
+    # ANYKERNEL3
+    - name: Create Flashable ZIP
+      run: |
+        cd ${GITHUB_WORKSPACE}
+
+        git clone \
+        --depth=1 \
+        https://github.com/osm0sis/AnyKernel3.git
+
+        cp ${{ env.FILE_PATH }}/${{ env.OUTPUT }} \
+        AnyKernel3/
+
+        cd AnyKernel3
+
+        zip -r9 Recovery-Flashable.zip * \
+        -x .git README.md LICENSE
+
+        mv Recovery-Flashable.zip \
+        ${{ env.FILE_PATH }}/
+
+      continue-on-error: true
 
     # TELEGRAM
     - name: Upload to Telegram
       if: github.event.inputs.TELEGRAM_UPLOAD == 'true'
       run: |
-        cd workspace/out/target/product/*/release
+        cd ${{ env.FILE_PATH }}
 
         for file in *; do
 
@@ -334,44 +405,75 @@ jobs:
 
       continue-on-error: true
 
-    # GITHUB RELEASE
-    - name: Upload Release
+    # RELEASE
+    - name: Upload to Release
+      if: env.CHECK_IMG_IS_OK == 'true'
       uses: softprops/action-gh-release@v2
 
       with:
-        tag_name: ${{ github.run_id }}
+        files: |
+          ${{ env.FILE_PATH }}/${{ env.OUTPUT }}
+          ${{ env.FILE_PATH }}/recovery.tar
+          ${{ env.FILE_PATH }}/recovery-installer.zip
+          ${{ env.FILE_PATH }}/Recovery-Flashable.zip
+          ${{ env.FILE_PATH }}/fastboot_package.zip
+          ${{ env.FILE_PATH }}/md5.txt
 
         name: |
-          Android13-Recovery-${{ env.BUILD_DATE }}
+          Android13-Recovery-${{ github.event.inputs.DEVICE_NAME }}-${{ env.BUILD_DATE }}
 
-        files: |
-          workspace/out/target/product/*/release/*
+        tag_name: ${{ github.run_id }}
 
         body: |
           # Android 13 VendorBoot Recovery
 
+          ### Device:
+          TECNO-${{ github.event.inputs.DEVICE_NAME }}
+
+          ---
+
           ## Build Information
 
-          - ROM Branch:
-            `${{ github.event.inputs.ROM_BRANCH }}`
+          - Build Date:
+            `${{ env.BUILD_DATE }}`
 
-          - Build Target:
+          - Android Branch:
+            `${{ github.event.inputs.MANIFEST_BRANCH }}`
+
+          - Build Type:
             `${{ github.event.inputs.BUILD_TARGET }}`
 
           - Lunch Target:
             `${{ github.event.inputs.LUNCH_TARGET }}`
 
+          ---
+
+          ## Source Information
+
+          - Device Tree:
+            ${{ github.event.inputs.DEVICE_TREE }}
+
+          - Branch:
+            `${{ github.event.inputs.DEVICE_TREE_BRANCH }}`
+
+          - Commit:
+            `${{ env.COMMIT_ID }}`
+
+          ---
+
           ## Included Files
 
           ✅ Recovery Image
 
-          ✅ Flashable ZIP
+          ✅ Recovery Installer
 
           ✅ Fastboot Package
 
+          ✅ Flashable ZIP
+
           ✅ MD5 Hashes
 
-          ✅ Optimized Build
+          ---
 
           ## Flash Command
 
@@ -379,4 +481,27 @@ jobs:
           fastboot flash vendor_boot vendor_boot.img
           ```
 
+          ---
+
+          MD5:
+          `${{ env.MD5_IMG }}`
+
+          ---
+
           Automated GitHub Actions build.
+
+    # LDCHECK
+    - name: Run LDCheck
+      run: |
+        cd tools || exit 0
+
+        mv -n libneeds ${{ env.FILE_PATH }}/recovery/root/ || true
+        mv -n ldcheck ${{ env.FILE_PATH }}/recovery/root/ || true
+
+        cd ${{ env.FILE_PATH }}/recovery/root/ || exit 0
+
+        python3 ldcheck \
+        -p system/lib64:vendor/lib64:system/lib:vendor/lib \
+        -d ${{ github.event.inputs.LDCHECK }}
+
+      continue-on-error: true
