@@ -42,6 +42,21 @@ on:
         - recovery
         - vendorboot
 
+      COMMON_TREE:
+        description: 'Common Tree Repository'
+        required: false
+        default: 'https://github.com/r3nzph/twrp-device_transsion_mt6768-common.git'
+
+      COMMON_BRANCH:
+        description: 'Common Tree Branch'
+        required: false
+        default: 'twrp'
+
+      COMMON_PATH:
+        description: 'Common Tree Path'
+        required: false
+        default: 'device/transsion/mt6768-common'
+
       LDCHECK:
         description: 'Path of blobs to check'
         required: true
@@ -148,6 +163,15 @@ jobs:
         cd ${{ github.event.inputs.DEVICE_PATH }}
 
         echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
+
+    - name: Clone Common Tree
+      run: |
+        cd ${GITHUB_WORKSPACE}/TWRP
+
+        git clone \
+          ${{ github.event.inputs.COMMON_TREE }} \
+          -b ${{ github.event.inputs.COMMON_BRANCH }} \
+          ./${{ github.event.inputs.COMMON_PATH }}
 
     - name: Check Manifest Branch
       uses: haya14busa/action-cond@v1
